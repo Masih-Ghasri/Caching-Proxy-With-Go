@@ -6,9 +6,7 @@ import (
 	"github.com/Masih-Ghasri/Caching-Proxy-With-Go.git/cache"
 	"log"
 	"net"
-	"strconv"
 	"strings"
-	"time"
 )
 
 func main() {
@@ -17,8 +15,8 @@ func main() {
 		log.Fatal("Error starting TCP server:", err)
 	}
 
-	c := cache.NewCache()
-	c.Set("exampleKey", []byte("exampleValue"), 5*60*1000000000) // 5 minutes
+	c := cache.NewCache(100)
+	c.Set("exampleKey", []byte("exampleValue"))
 
 	for {
 		conn, err := listener.Accept()
@@ -33,7 +31,6 @@ func main() {
 
 func handleConnection(conn net.Conn, c *cache.Cache) {
 	defer conn.Close()
-
 	reader := bufio.NewReader(conn)
 
 	for {
@@ -52,27 +49,15 @@ func handleConnection(conn net.Conn, c *cache.Cache) {
 
 		switch command {
 		case "SET":
-			if len(parts) < 3 {
-				conn.Write([]byte("Error: SET format is 'SET key value [duration_seconds]'\n"))
+			if len(parts) != 3 {
+				conn.Write([]byte("Error: SET format is 'SET key value'\n"))
 				continue
 			}
-
-			duration := 24 * time.Hour // Default duration
-
-			if len(parts) == 4 {
-				seconds, err := strconv.Atoi(parts[3])
-				if err != nil {
-					conn.Write([]byte("Error: Invalid duration, must be a number in seconds\n"))
-					continue
-				}
-				duration = time.Duration(seconds) * time.Second
-			}
-
-			c.Set(parts[1], []byte(parts[2]), duration)
+			c.Set(parts[1], []byte(parts[2]))
 			conn.Write([]byte("OK\n"))
 
 		case "GET":
-			if len(parts) < 2 {
+			if len(parts) != 2 {
 				conn.Write([]byte("Error: GET format is 'GET key'\n"))
 				continue
 			}
@@ -85,14 +70,14 @@ func handleConnection(conn net.Conn, c *cache.Cache) {
 			}
 
 		case "DELETE":
-			if len(parts) < 2 {
+			if len(parts) != 2 {
 				conn.Write([]byte("Error: DELETE format is 'DELETE key'\n"))
 				continue
 			}
 			if c.Delete(parts[1]) {
-				conn.Write([]byte("1\n")) // 1 for success
+				conn.Write([]byte("1\n"))
 			} else {
-				conn.Write([]byte("0\n")) // 0 for not found
+				conn.Write([]byte("0\n"))
 			}
 
 		default:
