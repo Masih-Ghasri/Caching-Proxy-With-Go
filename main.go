@@ -2,11 +2,12 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"github.com/Masih-Ghasri/Caching-Proxy-With-Go.git/cache"
 	"log"
 	"net"
+	"strconv"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -15,28 +16,29 @@ func main() {
 		log.Fatal("Error starting TCP server:", err)
 	}
 
-	c := cache.NewCache(100)
-	c.Set("exampleKey", []byte("exampleValue"))
+	c := cache.NewCache(100, 5*time.Minute)
+	log.Println("Caching server started on :8080")
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Println("Error accepting connection:", err)
+			log.Println("Error accepting connection:", err)
 			continue
 		}
-
 		go handleConnection(conn, c)
 	}
 }
 
 func handleConnection(conn net.Conn, c *cache.Cache) {
 	defer conn.Close()
+	log.Printf("Accepted new connection from %s", conn.RemoteAddr())
+
 	reader := bufio.NewReader(conn)
 
 	for {
 		message, err := reader.ReadString('\n')
 		if err != nil {
-			log.Println("Client disconnected or error reading:", err)
+			log.Printf("Client %s disconnected or error reading: %v", conn.RemoteAddr(), err)
 			return
 		}
 
@@ -49,11 +51,23 @@ func handleConnection(conn net.Conn, c *cache.Cache) {
 
 		switch command {
 		case "SET":
-			if len(parts) != 3 {
-				conn.Write([]byte("Error: SET format is 'SET key value'\n"))
+			if len(parts) < 3 {
+				conn.Write([]byte("Error: SET format is 'SET key value [duration_seconds]'\n"))
 				continue
 			}
-			c.Set(parts[1], []byte(parts[2]))
+
+			var duration time.Duration = 10 * time.Minute
+
+			if len(parts) == 4 {
+				seconds, err := strconv.Atoi(parts[3])
+				if err != nil {
+					conn.Write([]byte("Error: Invalid duration, must be a number in seconds\n"))
+					continue
+				}
+				duration = time.Duration(seconds) * time.Second
+			}
+
+			c.Set(parts[1], []byte(parts[2]), duration)
 			conn.Write([]byte("OK\n"))
 
 		case "GET":
@@ -75,9 +89,9 @@ func handleConnection(conn net.Conn, c *cache.Cache) {
 				continue
 			}
 			if c.Delete(parts[1]) {
-				conn.Write([]byte("1\n"))
+				conn.Write([]byte("1\n")) // 1 for success
 			} else {
-				conn.Write([]byte("0\n"))
+				conn.Write([]byte("0\n")) // 0 for not found
 			}
 
 		default:
