@@ -2,10 +2,14 @@ package cache
 
 import (
 	"container/list"
+	"encoding/gob"
 	"log"
+	"os"
 	"sync"
 	"time"
 )
+
+const SaveFilePath = "cache.gob"
 
 type entry struct {
 	key        string
@@ -27,11 +31,29 @@ func NewCache(maxSize int, cleanupInterval time.Duration) *Cache {
 		cache:   make(map[string]*list.Element),
 	}
 
+	if err := c.LoadFromFile(SaveFilePath); err != nil {
+		log.Println("Could not load cache from file, starting fresh:", err)
+	}
+
 	if cleanupInterval > 0 {
 		go c.cleanupLoop(cleanupInterval)
 	}
 
+	go c.saveLoop(5*time.Minute, SaveFilePath)
+
 	return c
+}
+
+func (c *Cache) saveLoop(interval time.Duration, path string) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+		if err := c.SaveToFile(path); err != nil {
+			log.Println("Error saving cache to file:", err)
+		}
+	}
 }
 
 func (c *Cache) Set(key string, value []byte, duration time.Duration) {
@@ -132,4 +154,56 @@ func (c *Cache) deleteExpired() {
 	if deletedCount > 0 {
 		log.Printf("Background cleanup deleted %d expired keys.", deletedCount)
 	}
+}
+
+func (c *Cache) SaveToFile(path string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	tempStorage := make(map[string]entry)
+	for key, element := range c.cache {
+		tempStorage[key] = *element.Value.(*entry)
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := gob.NewEncoder(file)
+	if err := encoder.Encode(tempStorage); err != nil {
+		return err
+	}
+
+	log.Printf("Cache successfully saved to file: %s", path)
+	return nil
+}
+
+func (c *Cache) LoadFromFile(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	decoder := gob.NewDecoder(file)
+
+	tempStorage := make(map[string]entry)
+	if err := decoder.Decode(&tempStorage); err != nil {
+		return err
+	}
+
+	for key, entryData := range tempStorage {
+		var duration time.Duration
+		if !entryData.expiration.IsZero() {
+			duration = time.Until(entryData.expiration)
+		}
+		if duration > 0 {
+			c.Set(key, entryData.value, duration)
+		}
+	}
+
+	log.Printf("Cache successfully loaded and rebuilt from file: %s", path)
+	return nil
 }
